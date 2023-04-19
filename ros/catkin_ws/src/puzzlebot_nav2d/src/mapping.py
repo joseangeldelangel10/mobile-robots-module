@@ -90,7 +90,13 @@ class Mapper:
 
     def base_cordinates_to_origin_cordinates(self, point_in_base_cords):
         """
+        Arguments
+        ---------
         point_in_base_cords -> np.array of shape = (3, 1)
+
+        Returns
+        ---------
+        point_in_origin_cords -> np.array of shape = (3, 1)
         """
         x_odom = self.odom.pose.pose.position.x
         y_odom = self.odom.pose.pose.position.y
@@ -102,7 +108,13 @@ class Mapper:
 
     def origin_cordinates_to_map_coordinates(self, point_in_origin_cords):
         """
+        Arguments
+        ---------
         point_in_origin_cords -> np.array of shape = (3, 1)
+        
+        Returns
+        ---------
+        point_in_map_cords -> np.array of shape = (3, 1)
         """
         point_in_map_cords = np.array([[1,0,0,],[0,-1,0,],[0,0,-1],[0,0,0,1]])
         return point_in_map_cords
