@@ -52,7 +52,7 @@ class Mapper:
         self.odom_listener = rospy.Subscriber('/true_odometry', Odometry,
                                               self.odom_callback)
         self.map_pub = rospy.Publisher('/map' , OccupancyGrid, queue_size=1 )
-        self.rate = rospy.Rate(5.0)
+        self.rate = rospy.Rate(0.2)
         self.map = OccupancyGrid()
         self.map.info.map_load_time = rospy.Time.now()
         self.map.info.resolution = map_resolution
@@ -68,20 +68,29 @@ class Mapper:
 
         self.map.data = np.zeros(map_width*map_height, dtype=np.int8)
         self.map.data[:] = -1 # Unknown
-        self.map2d = np.zeros((map_width, map_height), dtype=np.int8) # For computation
+        self.map2d = np.zeros((map_height, map_width), dtype=np.int8) # For computation
         
         self.num_elems_in_laser_scan = None
         self.scan = None
-        self.odom = None
+        self.odom = None    
+        # TODO TODO TODO check this for main logic since new scans and odoms will probably appear while processing data
+        self.block_new_laser_scan_data = False        
+        self.block_new_odom_data = False
+        self.started_processing_for_single_image = False
 
 
     def scan_callback(self, msg):
         """Called when a new scan is available from the lidar. """
-        self.scan = msg
+        if self.completed_processing_for_whole_img:
+            self.scan = msg
+            self.num_elems_in_laser_scan = len(self.scan.ranges)
+            self.completed_processing_for_whole_img = False        
+            
 
     def odom_callback(self, msg):
         """Called when a new odometry message is available. """
-        self.odom = msg
+        if self.completed_processing_for_whole_img:
+            self.odom = msg
 
     def base_cordinates_to_origin_cordinates(self, point_in_base_cords):
         """
@@ -131,13 +140,31 @@ class Mapper:
         point_x -> x cord on map frame
         point_y -> y cord on map frame        
         """
-        pass 
+        if pixel_i >= self.map.info.height or pixel_j >= self.map.info.width:
+            return False
+        
+        pixel_x_min, pixel_x_max = (pixel_j*self.map.info.resolution, pixel_j*self.map.info.resolution + self.map.info.resolution)
+        pixel_y_min, pixel_y_max = (pixel_i*self.map.info.resolution, pixel_i*self.map.info.resolution + self.map.info.resolution)
+        if (point_x >= pixel_x_min and point_x <= pixel_x_max) and (point_y >= pixel_y_min and point_y <= pixel_y_max):
+            return True
+        else:
+            return False        
 
     def get_ith_laser_info(self, i):
         """
         function that returns the angle and len of the ith laser scan
         """
+        if self.num_elems_in_laser_scan is not None:
+            ray_len = self.scan.ranges[i]
+            ray_ang = self.scan.range_min + self.scan.angle_increment*i
         return (ray_len, ray_ang)
+    
+    def set_new_pixel_val(self, pixel_i, pixel_j, new_val):
+        current_pixel_val = self.map2d[pixel_i, pixel_j]
+        if current_pixel_val != -1:
+            self.map2d[pixel_i, pixel_j] = new_val
+            self.map[ pixel_i*self.map.info.width + pixel_j ] = new_val
+        pass
 
     def ray_to_pixels(self, xr, yr, x, y):
         """ Set the pixels along the ray with origin (xr,yr) and with range ending at (x,y) to 0 (free) and the end point to 100 (occupied).
@@ -175,13 +202,7 @@ class Mapper:
                 #--------------------------------------------------------------
                 #--------------------------------------------------------------
 
-                orig_m, xy_m = scan_to_map_coordinates(self.scan, self.odom, self.map.info.origin)
-
-                print(orig_m)
-                for xy_ in xy_m:
-                    #print(xy_)
-                    ray_to_pixels(orig_m[0], orig_m[1], xy_[0], xy_[1], self.map.info.resolution, self.map2d)
-
+                
 
                 # Publish the map
                 np.copyto(self.map.data,  self.map2d.reshape(-1)) # Copy from map2d to 1d data, fastest way
@@ -200,7 +221,7 @@ if __name__ == '__main__':
     rospy.init_node('Mapper')
     width = rospy.get_param("/mapper/width", 400)
     height = rospy.get_param("/mapper/height", 400)
-    resolution = rospy.get_param("/mapper/resolution", 0.1) # meters per pixel
+    resolution = rospy.get_param("/mapper/resolution", 0.05) # meters per pixel
 
     Mapper(width, height, resolution).mapit()
 
