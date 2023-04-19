@@ -74,22 +74,18 @@ class Mapper:
         self.scan = None
         self.odom = None    
         # TODO TODO TODO check this for main logic since new scans and odoms will probably appear while processing data
-        self.block_new_laser_scan_data = False        
-        self.block_new_odom_data = False
-        self.started_processing_for_single_image = False
+        self.block_new_laser_scan_and_odom_data = False
 
 
     def scan_callback(self, msg):
         """Called when a new scan is available from the lidar. """
-        if self.completed_processing_for_whole_img:
+        if not self.block_new_laser_scan_and_odom_data:
             self.scan = msg
-            self.num_elems_in_laser_scan = len(self.scan.ranges)
-            self.completed_processing_for_whole_img = False        
-            
+            self.num_elems_in_laser_scan = len(self.scan.ranges)                        
 
     def odom_callback(self, msg):
         """Called when a new odometry message is available. """
-        if self.completed_processing_for_whole_img:
+        if not self.block_new_laser_scan_and_odom_data:
             self.odom = msg
 
     def base_cordinates_to_origin_cordinates(self, point_in_base_cords):
@@ -166,6 +162,16 @@ class Mapper:
             self.map[ pixel_i*self.map.info.width + pixel_j ] = new_val
         pass
 
+    def find_pixel_that_contains_point(self, point_x, point_y):
+        """ function that recieves the cordinates x, y of a point in the map frame and 
+        returns the indexes of the pixel that cointains such point to it"""
+        pixel_i = point_y//self.map.info.resolution
+        pixel_j = point_x//self.map.info.resolution
+        if pixel_i >= 0.0 and pixel_i < self.map.info.height and pixel_j >= 0.0 and pixel_j < self.map.info.width:
+            return (pixel_i, pixel_j)
+        else:
+            return (None, None) # meaning invalid pixel val 
+
     def ray_to_pixels(self, xr, yr, x, y):
         """ Set the pixels along the ray with origin (xr,yr) and with range ending at (x,y) to 0 (free) and the end point to 100 (occupied).
         Arguments
@@ -201,9 +207,19 @@ class Mapper:
                 # 3) Set pixels along the ray to 0 (free).
                 #--------------------------------------------------------------
                 #--------------------------------------------------------------
-
-                
-
+                self.block_new_laser_scan_and_odom_data = True        
+                for s in range(self.num_elems_in_laser_scan):
+                    scan_len, scan_ang = self.get_ith_laser_info(s)
+                    scan_cartesian_cords_in_b = self.polar_to_cartesian(scan_len, scan_ang)
+                    scan_cartesian_cords_in_b_formated_1 = np.array([scan_cartesian_cords_in_b[0], scan_cartesian_cords_in_b[1], 0.0])
+                    scan_cartesian_cords_in_b_formated_2 = scan_cartesian_cords_in_b_formated_1.reshape((3,1))
+                    scan_cartesian_cords_in_map = self.origin_cordinates_to_map_coordinates( self.base_cordinates_to_origin_cordinates(scan_cartesian_cords_in_b_formated_2) )
+                    scan_collision_px_i, scan_collision_px_j = self.find_pixel_that_contains_point(scan_cartesian_cords_in_map[0][0], scan_cartesian_cords_in_map[1][0])
+                    if scan_collision_px_i is not None and scan_collision_px_j is not None:
+                        puzzlebot_position_in_b = np.zeros((3,1))
+                        puzzlebot_position_in_map = self.origin_cordinates_to_map_coordinates( self.base_cordinates_to_origin_cordinates(puzzlebot_position_in_b) )    
+                        self.ray_to_pixels(puzzlebot_position_in_map[0][0], puzzlebot_position_in_map[1][0], scan_cartesian_cords_in_map[0][0], scan_cartesian_cords_in_map[1][0])                  
+                self.block_new_laser_scan_and_odom_data = False  
                 # Publish the map
                 np.copyto(self.map.data,  self.map2d.reshape(-1)) # Copy from map2d to 1d data, fastest way
                 self.map.header.stamp = rospy.Time.now()
