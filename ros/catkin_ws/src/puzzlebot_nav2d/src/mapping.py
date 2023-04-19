@@ -26,6 +26,14 @@ import numpy as np
 import rospy
 from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
 from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import Pose
+from ros_numpy import numpify
+
+"""
+joses notes:
+- in puzz sim lidar covers 180 deg
+- lidar vals go from 0 to 180 deg
+"""
 
 class Mapper:
     def __init__(self, map_width, map_height, map_resolution):
@@ -37,19 +45,32 @@ class Mapper:
         map_height : float
             Height of map in pixels (y-axis)
         map_resolution : float
-            Resolution of map in pixels/meter
+            Resolution of map in meter per pixel
         """
         self.scan_listener = rospy.Subscriber('/laser/scan', LaserScan,
                                               self.scan_callback)
-        self.odom_listener = rospy.Subscriber('/odom', Odometry,
+        self.odom_listener = rospy.Subscriber('/true_odometry', Odometry,
                                               self.odom_callback)
         self.map_pub = rospy.Publisher('/map' , OccupancyGrid, queue_size=1 )
         self.rate = rospy.Rate(5.0)
         self.map = OccupancyGrid()
-        self.map.info = MapMetaData(rospy.Time.now(), map_resolution, map_width, map_height, 0, 0, 0)
+        self.map.info.map_load_time = rospy.Time.now()
+        self.map.info.resolution = map_resolution
+        self.map.info.width = map_width
+        self.map.info.height = map_height
+        self.map.info.origin.position.x = -(map_width*map_resolution)/2.0
+        self.map.info.origin.position.y = (map_height*map_resolution)/2.0
+        self.map.info.origin.position.z = 0.0
+        self.map.info.origin.orientation.x = 1.0
+        self.map.info.origin.orientation.y = 0.0
+        self.map.info.origin.orientation.z = 0.0
+        self.map.info.origin.orientation.w = 0.0
+
         self.map.data = np.zeros(map_width*map_height, dtype=np.int8)
         self.map.data[:] = -1 # Unknown
         self.map2d = np.zeros((map_width, map_height), dtype=np.int8) # For computation
+        
+        self.num_elems_in_laser_scan = None
         self.scan = None
         self.odom = None
 
@@ -62,32 +83,63 @@ class Mapper:
         """Called when a new odometry message is available. """
         self.odom = msg
 
-    def map(self):
-        while not rospy.is_shutdown():
+    def base_cordinates_to_origin_cordinates(self, point_in_base_cords):
+        """
+        point_in_base_cords -> np.array of shape = (3, 1)
+        """
+        x_odom = self.odom.pose.pose.position.x
+        y_odom = self.odom.pose.pose.position.y
+        z_odom = self.odom.pose.pose.position.z
+        th_odom = 2*np.arcos(self.odom.pose.pose.orientation.z)
 
-            if self.scan is not None and self.odom is not None:
-                #--------------------------------------------------------------
-                # Your code here
-                # 1) For each ray in the scan, calculate the corresponding
-                #    position in the map by transforming the ray from the robot
-                #    frame to the map frame, using the odometry data. The map frame
-                #    is defined as the frame of the first laser scan, when the robot
-                #    is initialized.
-                # 2) If the ray range is less than max_range, then set the map pixel
-                #    corresponding to the end point of the ray to 100 (occupied).
-                # 3) Set pixels along the ray to 0 (free).
-                #--------------------------------------------------------------
-                #--------------------------------------------------------------
+        point_in_origin_cords = np.array([[np.cos(th_odom),-np.sin(th_odom),0,x_odom],[np.sin(th_odom),np.cos(th_odom),0,y_odom],[0,0,1,z_odom],[0,0,0,1]])
+        return point_in_origin_cords
 
+    def origin_cordinates_to_map_coordinates(self, point_in_origin_cords):
+        """
+        point_in_origin_cords -> np.array of shape = (3, 1)
+        """
+        point_in_map_cords = np.array([[1,0,0,],[0,-1,0,],[0,0,-1],[0,0,0,1]])
+        return point_in_map_cords
 
-                # Publish the map
-                np.copyto(self.map.data,  self.map2d.reshape(-1)) # Copy from map2d to 1d data, fastest way
-                self.map.header.stamp = rospy.Time.now()
-                self.map_pub.publish(self.map)
-            self.rate.sleep()        
-            
+    def polar_to_cartesian(self, r, th):
+        """ Convert a polar coordinate to a cartesian coordinate.
+        Arguments
+        ---------
+        r : float
+            The radius
+        th : float
+            The angle
+        Returns
+        -------
+        (x, y) : tuple of floats
+            The cartesian coordinates
+        
+        """
 
-def ray_to_pixels(xr, yr, x, y, map_resolution, map):
+        #------------------------------------------------------
+        # Your code here
+        # Convert the polar coordinate to a cartesian coordinate
+        x = r*np.cos(th)
+        y = r*np.sin(th)
+        #-----------------------------------------------------
+
+        return (x, y)
+    
+    def point_is_inside_pixel(self, point_x, point_y, pixel_i, pixel_j):
+        """
+        point_x -> x cord on map frame
+        point_y -> y cord on map frame        
+        """
+        pass 
+
+    def get_ith_laser_info(self, i):
+        """
+        function that returns the angle and len of the ith laser scan
+        """
+        return (ray_len, ray_ang)
+
+    def ray_to_pixels(self, xr, yr, x, y):
         """ Set the pixels along the ray with origin (xr,yr) and with range ending at (x,y) to 0 (free) and the end point to 100 (occupied).
         Arguments
         ---------
@@ -96,112 +148,47 @@ def ray_to_pixels(xr, yr, x, y, map_resolution, map):
         yr : float
             y-coordinate of the robot in the map frame
         x : ndarray
-            x-coordinates of the scan in the map frame
+            x coordinate of the point where laser collides
         y : ndarray
-            y-coordinates of the scan in the map frame
-        map_resolution : float
-            Resolution of map in pixels/meter
-        map : ndarray
-            The map as a 2d numpy array
+            x coordinate of the point where laser collides
         """
-        #--------------------------------------------------------------
-        # Your code here
-        #--------------------------------------------------------------
-        #--------------------------------------------------------------
-def scan_to_map_coordinates(scan, odom):
-    """ Convert a scan from the robot frame to the map frame.
-    Arguments
-    ---------
-    scan : LaserScan
-        The scan to convert
-    odom : Odometry
-        The odometry message providing the robot pose
-    Returns
-    -------
-    (xr, yr) : tuple of floats
-        The position of the robot in the map frame
-    xy : list
-        list of tuples (x,y) with the coordinates of the scan end points in the map frame
 
-    Tests
-    -----
-    >>> scan = test_laser_scan()
-    >>> odom = test_odometry()
-    >>> orig, xy = scan_to_map_coordinates(scan, odom)
-    >>> np.allclose(orig, (1.0, 2.0))
-    True
-    >>> np.allclose(xy,[(0.0, 2.0), (1.0, 4.0), (2.0, 1.0)])
-    True
-    """
+        pass
 
-    robot_origin = odom.pose.pose.position
-    xr = robot_origin.x
-    yr = robot_origin.y
-    xy = []
-    for i in range(len(scan.ranges)):
-        th = scan.angle_min + i*scan.angle_increment
-        r = scan.ranges[i]
-        x, y = polar_to_cartesian(r, th)
-        xy.append((x, y))
-    return (xr, yr), xy
+    def mapit(self):
+        while not rospy.is_shutdown():
 
-def polar_to_cartesian(r, th):
-    """ Convert a polar coordinate to a cartesian coordinate.
-    Arguments
-    ---------
-    r : float
-        The radius
-    th : float
-        The angle
-    Returns
-    -------
-    (x, y) : tuple of floats
-        The cartesian coordinates
-    Tests
-    -----
-    >>> polar_to_cartesian(1.0, 0.0)
-    (1.0, 0.0)
-    >>> polar_to_cartesian(1.0, np.pi/2)
-    (0.0, 1.0)
-    >>> polar_to_cartesian(1.0, np.pi)
-    (-1.0, 0.0)
-    >>> polar_to_cartesian(1.0, 3*np.pi/2)
-    (0.0, -1.0)
-    """
-    #--------------------------------------------------------------
-    # Your code here
-    #--------------------------------------------------------------
-    #--------------------------------------------------------------
+            if self.scan is not None and self.odom is not None:
+                #--------------------------------------------------------------
+                # Your code here
+                # 1) For each ray in the scan, calculate the corresponding
+                #    position in the map by transforming the ray from the robot
+                #    frame to the map frame, using the odometry data. 
+                #    It is convenient to define the map frame as having its origin
+                #    in the pixel (0,0), and directions corresponding to the 
+                #    rows and pixels of the map (occupancy grid).
+                #    is defined as the frame of the first laser scan, when the robot
+                #    is initialized.
+                # 2) If the ray range is less than max_range, then set the map pixel
+                #    corresponding to the end point of the ray to 100 (occupied).
+                # 3) Set pixels along the ray to 0 (free).
+                #--------------------------------------------------------------
+                #--------------------------------------------------------------
+
+                orig_m, xy_m = scan_to_map_coordinates(self.scan, self.odom, self.map.info.origin)
+
+                print(orig_m)
+                for xy_ in xy_m:
+                    #print(xy_)
+                    ray_to_pixels(orig_m[0], orig_m[1], xy_[0], xy_[1], self.map.info.resolution, self.map2d)
 
 
+                # Publish the map
+                np.copyto(self.map.data,  self.map2d.reshape(-1)) # Copy from map2d to 1d data, fastest way
+                self.map.header.stamp = rospy.Time.now()
+                self.map_pub.publish(self.map)
+            self.rate.sleep()
 
-    return (x, y)
-def test_laser_scan():
-    """ Create a simple test LaserScan message.
-    There are 3 rays, to the left, straight ahead and to the right.
-    Each ray has range 1.0. """
-    scan = LaserScan()
-    scan.header.frame_id = 'base_link'
-    scan.angle_min = -np.pi/2
-    scan.angle_max = np.pi/2
-    scan.angle_increment = np.pi/2
-    scan.range_min = 0.0
-    scan.range_max = 10.0
-    scan.ranges = [1.0, 1.0, 1.0]
-    return scan
-def test_odometry():
-    """ Create a test Odometry message. """
-    odom = Odometry()
-    odom.header.frame_id = 'odom'
-    odom.pose.pose.position.x = 1.0
-    odom.pose.pose.position.y = 2.0
-    odom.pose.pose.position.z = 0.0
-    # Quaternion for 90 degree rotation around z-axis. So the robot is facing in the y-direction.
-    odom.pose.pose.orientation.x = 0.0
-    odom.pose.pose.orientation.y = 0.0
-    odom.pose.pose.orientation.z = np.sin(np.pi/4)
-    odom.pose.pose.orientation.w = np.cos(np.pi/4)
-    return odom
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
@@ -211,7 +198,11 @@ if __name__ == '__main__':
             sys.exit(0)
 
     rospy.init_node('Mapper')
-    Mapper().map()
+    width = rospy.get_param("/mapper/width", 400)
+    height = rospy.get_param("/mapper/height", 400)
+    resolution = rospy.get_param("/mapper/resolution", 0.1) # meters per pixel
+
+    Mapper(width, height, resolution).mapit()
 
 
 
