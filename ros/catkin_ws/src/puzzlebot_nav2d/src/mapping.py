@@ -152,12 +152,8 @@ class Mapper:
         
         """
 
-        #------------------------------------------------------
-        # Your code here
-        # Convert the polar coordinate to a cartesian coordinate
         x = r*np.cos(th)
         y = r*np.sin(th)
-        #-----------------------------------------------------
 
         return (x, y)
     
