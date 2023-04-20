@@ -73,7 +73,7 @@ class Mapper:
         self.num_elems_in_laser_scan = None
         self.scan = None
         self.odom = None    
-        # TODO TODO TODO check this for main logic since new scans and odoms will probably appear while processing data
+        
         self.block_new_laser_scan_and_odom_data = False
 
 
@@ -103,8 +103,14 @@ class Mapper:
         z_odom = self.odom.pose.pose.position.z
         th_odom = 2*np.arcos(self.odom.pose.pose.orientation.z)
 
-        point_in_origin_cords = np.array([[np.cos(th_odom),-np.sin(th_odom),0,x_odom],[np.sin(th_odom),np.cos(th_odom),0,y_odom],[0,0,1,z_odom],[0,0,0,1]])
-        return point_in_origin_cords
+        transofrm = np.array([[np.cos(th_odom),-np.sin(th_odom),0,x_odom],
+                                           [np.sin(th_odom),np.cos(th_odom),0,y_odom],
+                                           [0,0,1,z_odom],
+                                           [0,0,0,1]])
+        
+        point_in_origin_cords = transofrm*np.concatenate(point_in_base_cords,[np.array([1])])
+        
+        return point_in_origin_cords[:][:3]
 
     def origin_cordinates_to_map_coordinates(self, point_in_origin_cords):
         """
@@ -116,7 +122,10 @@ class Mapper:
         ---------
         point_in_map_cords -> np.array of shape = (3, 1)
         """
-        point_in_map_cords = np.array([[1,0,0,],[0,-1,0,],[0,0,-1],[0,0,0,1]])
+        transform = np.array([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
+
+        point_in_map_cords = transform*np.concatenate(point_in_origin_cords,[np.array([1])])
+
         return point_in_map_cords
 
     def polar_to_cartesian(self, r, th):
@@ -156,7 +165,18 @@ class Mapper:
         if (point_x >= pixel_x_min and point_x <= pixel_x_max) and (point_y >= pixel_y_min and point_y <= pixel_y_max):
             return True
         else:
-            return False        
+            return False
+
+    def get_pixel_center(self,pixel_i, pixel_j):
+
+        pixel_x_min, pixel_x_max = (pixel_j*self.map.info.resolution, pixel_j*self.map.info.resolution + self.map.info.resolution)
+        pixel_y_min, pixel_y_max = (pixel_i*self.map.info.resolution, pixel_i*self.map.info.resolution + self.map.info.resolution)
+
+        center_j = pixel_x_min + (pixel_x_max - pixel_x_min)/2
+        center_i = pixel_y_min + (pixel_y_max - pixel_y_min)/2
+
+        return center_j,center_i
+
 
     def get_ith_laser_info(self, i):
         """
@@ -198,7 +218,33 @@ class Mapper:
             x coordinate of the point where laser collides
         """
 
-        pass
+        m1 = (y - yr)/(x - xr)
+        b1 = -m1*xr + yr
+
+        i_Puzzlebot, j_Puzzlebot = self.find_pixel_that_contains_point( xr, yr)
+        self.set_new_pixel_val(i_Puzzlebot,j_Puzzlebot,0)
+        i_Punto, j_Punto = self.find_pixel_that_contains_point( x, y)
+        self.set_new_pixel_val(i_Punto,j_Punto,100)
+
+        min_i = min(i_Puzzlebot,i_Punto)
+        max_i = max(i_Puzzlebot,i_Punto)
+
+        min_j = min(j_Puzzlebot,j_Punto)
+        max_j = max(j_Puzzlebot,j_Punto)
+
+        for i in range(min_i,max_i+1):
+            for j in range(min_j,max_j+1):
+                xp, yp =  self.get_pixel_center(i, j)
+
+                m2 = -1/m1
+                b2 = -m2*xp + yp
+
+                x_var = (b1 - b2)/(m2 - m1)
+                y_var =  m1*x_var + b1
+
+                if self.point_is_inside_pixel(x_var,y_var,i,j):
+                    self.set_new_pixel_val(i,j,0)
+
 
     def mapit(self):
         while not rospy.is_shutdown():
