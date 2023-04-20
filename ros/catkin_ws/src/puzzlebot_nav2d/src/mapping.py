@@ -27,7 +27,7 @@ import rospy
 from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Pose
-from ros_numpy import numpify
+from tf.transformations import euler_from_quaternion
 
 """
 joses notes:
@@ -52,7 +52,7 @@ class Mapper:
         self.odom_listener = rospy.Subscriber('/true_odometry', Odometry,
                                               self.odom_callback)
         self.map_pub = rospy.Publisher('/map' , OccupancyGrid, queue_size=1 )
-        self.rate = rospy.Rate(0.2)
+        self.rate = rospy.Rate(2)
         self.map = OccupancyGrid()
         self.map.info.map_load_time = rospy.Time.now()
         self.map.info.resolution = map_resolution
@@ -68,7 +68,7 @@ class Mapper:
 
         self.map.data = np.zeros(map_width*map_height, dtype=np.int8)
         self.map.data[:] = -1 # Unknown
-        self.map2d = np.zeros((map_height, map_width), dtype=np.int8) # For computation
+        self.map2d = np.ones((map_height, map_width), dtype=np.int8)*-1 # For computation
         
         self.num_elems_in_laser_scan = None
         self.scan = None
@@ -101,14 +101,19 @@ class Mapper:
         x_odom = self.odom.pose.pose.position.x
         y_odom = self.odom.pose.pose.position.y
         z_odom = self.odom.pose.pose.position.z
-        th_odom = 2*np.arcos(self.odom.pose.pose.orientation.z)
+        #th_odom = 2*np.arccos(self.odom.pose.pose.orientation.z)
+        _, _, th_odom = euler_from_quaternion([self.odom.pose.pose.orientation.x, 
+                                             self.odom.pose.pose.orientation.y, 
+                                             self.odom.pose.pose.orientation.z,
+                                             self.odom.pose.pose.orientation.w])
 
-        transofrm = np.array([[np.cos(th_odom),-np.sin(th_odom),0,x_odom],
-                                           [np.sin(th_odom),np.cos(th_odom),0,y_odom],
-                                           [0,0,1,z_odom],
-                                           [0,0,0,1]])
-        
-        point_in_origin_cords = transofrm*np.concatenate(point_in_base_cords,[np.array([1])])
+        transofrm = np.array([[np.cos(th_odom),-np.sin(th_odom),0.0,x_odom],
+                            [np.sin(th_odom),np.cos(th_odom),0.0,y_odom],
+                            [0.0, 0.0, 1.0, z_odom],
+                            [0.0, 0.0, 0.0, 1.0]])
+        point_in_base_cords_formated = np.append(point_in_base_cords, 1.0)
+        point_in_base_cords_formated = point_in_base_cords_formated.reshape(4,1)
+        point_in_origin_cords = np.matmul(transofrm,point_in_base_cords_formated)
         
         return point_in_origin_cords[:][:3]
 
@@ -122,11 +127,15 @@ class Mapper:
         ---------
         point_in_map_cords -> np.array of shape = (3, 1)
         """
-        transform = np.array([[1,0,0,0],[0,-1,0,0],[0,0,-1,0],[0,0,0,1]])
+        transform = np.array([[1.0, 0.0, 0.0,(self.map.info.width * self.map.info.resolution )/2.0],
+                              [0.0, -1,0, (self.map.info.height * self.map.info.resolution )/2.0],
+                              [0.0, 0.0, -1.0, 0.0],
+                              [0.0, 0.0, 0.0, 1.0]])
+        point_in_origin_cords_formated = np.append(point_in_origin_cords, 1)
+        point_in_origin_cords_formated = point_in_origin_cords_formated.reshape((4,1))
+        point_in_map_cords = np.matmul(transform,point_in_origin_cords_formated)
 
-        point_in_map_cords = transform*np.concatenate(point_in_origin_cords,[np.array([1])])
-
-        return point_in_map_cords
+        return point_in_map_cords[:][:3]
 
     def polar_to_cartesian(self, r, th):
         """ Convert a polar coordinate to a cartesian coordinate.
@@ -184,15 +193,13 @@ class Mapper:
         """
         if self.num_elems_in_laser_scan is not None:
             ray_len = self.scan.ranges[i]
-            ray_ang = self.scan.range_min + self.scan.angle_increment*i
+            ray_ang = self.scan.angle_min + self.scan.angle_increment*i
         return (ray_len, ray_ang)
     
-    def set_new_pixel_val(self, pixel_i, pixel_j, new_val):
+    def set_new_pixel_val(self, pixel_i, pixel_j, new_val):        
         current_pixel_val = self.map2d[pixel_i, pixel_j]
-        if current_pixel_val != -1:
-            self.map2d[pixel_i, pixel_j] = new_val
-            self.map[ pixel_i*self.map.info.width + pixel_j ] = new_val
-        pass
+        if current_pixel_val == -1:
+            self.map2d[pixel_i, pixel_j] = new_val            
 
     def find_pixel_that_contains_point(self, point_x, point_y):
         """ function that recieves the cordinates x, y of a point in the map frame and 
@@ -200,7 +207,7 @@ class Mapper:
         pixel_i = point_y//self.map.info.resolution
         pixel_j = point_x//self.map.info.resolution
         if pixel_i >= 0.0 and pixel_i < self.map.info.height and pixel_j >= 0.0 and pixel_j < self.map.info.width:
-            return (pixel_i, pixel_j)
+            return (int(pixel_i), int(pixel_j))
         else:
             return (None, None) # meaning invalid pixel val 
 
@@ -221,10 +228,10 @@ class Mapper:
         m1 = (y - yr)/(x - xr)
         b1 = -m1*xr + yr
 
-        i_Puzzlebot, j_Puzzlebot = self.find_pixel_that_contains_point( xr, yr)
-        self.set_new_pixel_val(i_Puzzlebot,j_Puzzlebot,0)
-        i_Punto, j_Punto = self.find_pixel_that_contains_point( x, y)
-        self.set_new_pixel_val(i_Punto,j_Punto,100)
+        i_Puzzlebot, j_Puzzlebot = self.find_pixel_that_contains_point( xr, yr)        
+        i_Punto, j_Punto = self.find_pixel_that_contains_point( x, y)        
+        self.set_new_pixel_val(i_Puzzlebot,j_Puzzlebot,0.0)
+        self.set_new_pixel_val(i_Punto,j_Punto,100.0)
 
         min_i = min(i_Puzzlebot,i_Punto)
         max_i = max(i_Puzzlebot,i_Punto)
@@ -264,18 +271,23 @@ class Mapper:
                 #    corresponding to the end point of the ray to 100 (occupied).
                 # 3) Set pixels along the ray to 0 (free).
                 #--------------------------------------------------------------
-                #--------------------------------------------------------------
-                self.block_new_laser_scan_and_odom_data = True        
-                for s in range(self.num_elems_in_laser_scan):
+                #--------------------------------------------------------------                
+                self.block_new_laser_scan_and_odom_data = True
+                print(" ========= num elems in laser scan: {n}".format(n = self.num_elems_in_laser_scan))        
+                for s in range(self.num_elems_in_laser_scan):                
                     scan_len, scan_ang = self.get_ith_laser_info(s)
+                    print("scan ang: {m}, scan len: {n}".format(m=scan_ang, n = scan_len))        
                     scan_cartesian_cords_in_b = self.polar_to_cartesian(scan_len, scan_ang)
                     scan_cartesian_cords_in_b_formated_1 = np.array([scan_cartesian_cords_in_b[0], scan_cartesian_cords_in_b[1], 0.0])
                     scan_cartesian_cords_in_b_formated_2 = scan_cartesian_cords_in_b_formated_1.reshape((3,1))
                     scan_cartesian_cords_in_map = self.origin_cordinates_to_map_coordinates( self.base_cordinates_to_origin_cordinates(scan_cartesian_cords_in_b_formated_2) )
+                    print("scan_cartesian_cords_in_map: {c}".format(c = scan_cartesian_cords_in_map))
                     scan_collision_px_i, scan_collision_px_j = self.find_pixel_that_contains_point(scan_cartesian_cords_in_map[0][0], scan_cartesian_cords_in_map[1][0])
+                    print("colliding pixel cords: {i}, {j}".format(i=scan_collision_px_i, j = scan_collision_px_j))
                     if scan_collision_px_i is not None and scan_collision_px_j is not None:
                         puzzlebot_position_in_b = np.zeros((3,1))
                         puzzlebot_position_in_map = self.origin_cordinates_to_map_coordinates( self.base_cordinates_to_origin_cordinates(puzzlebot_position_in_b) )    
+                        print("puzzlebot possition in_map: {c}".format(c = puzzlebot_position_in_map))
                         self.ray_to_pixels(puzzlebot_position_in_map[0][0], puzzlebot_position_in_map[1][0], scan_cartesian_cords_in_map[0][0], scan_cartesian_cords_in_map[1][0])                  
                 self.block_new_laser_scan_and_odom_data = False  
                 # Publish the map
@@ -293,9 +305,9 @@ if __name__ == '__main__':
             sys.exit(0)
 
     rospy.init_node('Mapper')
-    width = rospy.get_param("/mapper/width", 400)
-    height = rospy.get_param("/mapper/height", 400)
-    resolution = rospy.get_param("/mapper/resolution", 0.05) # meters per pixel
+    width = rospy.get_param("/mapper/width", 300)
+    height = rospy.get_param("/mapper/height", 300)
+    resolution = rospy.get_param("/mapper/resolution", 0.1) # meters per pixel
 
     Mapper(width, height, resolution).mapit()
 
