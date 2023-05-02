@@ -65,6 +65,7 @@ class Mapper:
         self.map.info.origin.orientation.y = 0.0
         self.map.info.origin.orientation.z = 0.0
         self.map.info.origin.orientation.w = 0.0
+        self.map.header.frame_id = "world"
 
         self.map.data = np.zeros(map_width*map_height, dtype=np.int8)
         self.map.data[:] = -1 # Unknown
